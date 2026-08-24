@@ -9,7 +9,9 @@
     { id: 'google', label: '\ud83d\udd0d Google Ads', placeholder: 'Plumbing service in Lahore, 24/7 emergency callouts…', inputLabel: 'Describe your offer',
       examples: ['Web design agency for small businesses', 'Car rental service, airport pickup', 'Online Quran classes for kids'] },
     { id: 'banner', label: '\ud83d\uddbc\ufe0f Banner / Display Ad', placeholder: 'Summer clearance sale, up to 50% off all items…', inputLabel: 'Describe your promotion',
-      examples: ['Back-to-school sale on laptops', 'New restaurant opening, grand opening discount', 'Fitness app free trial offer'] }
+      examples: ['Back-to-school sale on laptops', 'New restaurant opening, grand opening discount', 'Fitness app free trial offer'] },
+    { id: 'video', label: '\ud83c\udfac Animated Ad Video', placeholder: 'A running shoe launch, energetic and modern…', inputLabel: 'Describe your product or offer', isVideo: true,
+      examples: ['A new perfume launch, elegant and luxurious', 'A coffee brand, cozy and warm', 'A tech gadget reveal, sleek and futuristic'] }
   ];
 
   const HISTORY_DAYS = 30;
@@ -89,11 +91,88 @@
 
   function scrollToBottom() { logScroll.scrollTop = logScroll.scrollHeight; }
 
+  /* ---------- animated video builder (Ken Burns style, client-side) ---------- */
+  function loadImg(src) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = src;
+    });
+  }
+
+  function drawKenBurns(ctx, canvas, img, duration) {
+    return new Promise((resolve) => {
+      const start = performance.now();
+      const startScale = 1.0, endScale = 1.15;
+      function frame(now) {
+        const t = Math.min((now - start) / duration, 1);
+        const scale = startScale + (endScale - startScale) * t;
+        const cw = canvas.width, ch = canvas.height;
+        const baseScale = Math.max(cw / img.width, ch / img.height);
+        const s = baseScale * scale;
+        const dw = img.width * s, dh = img.height * s;
+        const dx = (cw - dw) / 2, dy = (ch - dh) / 2;
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, cw, ch);
+        ctx.drawImage(img, dx, dy, dw, dh);
+        if (t < 1) requestAnimationFrame(frame);
+        else resolve();
+      }
+      requestAnimationFrame(frame);
+    });
+  }
+
+  async function buildKenBurnsVideo(imageSrcs, msPerImage) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 720;
+    canvas.height = 720;
+    const ctx = canvas.getContext('2d');
+    const stream = canvas.captureStream(30);
+    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm';
+    const recorder = new MediaRecorder(stream, { mimeType });
+    const chunks = [];
+    recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+    const done = new Promise((resolve) => { recorder.onstop = () => resolve(new Blob(chunks, { type: 'video/webm' })); });
+    recorder.start();
+
+    for (const src of imageSrcs) {
+      const img = await loadImg(src);
+      await drawKenBurns(ctx, canvas, img, msPerImage);
+    }
+    recorder.stop();
+    return await done;
+  }
+
   function buildMsgEl(msg) {
     const div = document.createElement('div');
     div.className = 'chat-msg ' + (msg.role === 'user' ? 'user' : (msg.type === 'error' ? 'error' : 'assistant'));
 
-    if (msg.type === 'ad') {
+    if (msg.type === 'video') {
+      const card = document.createElement('div');
+      card.className = 'ad-card';
+      if (msg.text) {
+        const cap = document.createElement('div');
+        cap.className = 'ad-copy';
+        cap.textContent = msg.text;
+        card.appendChild(cap);
+      }
+      const video = document.createElement('video');
+      video.className = 'ad-video';
+      video.src = msg.videoUrl;
+      video.controls = true;
+      video.autoplay = true;
+      video.loop = true;
+      video.muted = true;
+      card.appendChild(video);
+      const dl = document.createElement('a');
+      dl.className = 'copy-msg-btn';
+      dl.textContent = 'Download video';
+      dl.href = msg.videoUrl;
+      dl.download = 'ad-video.webm';
+      card.appendChild(dl);
+      div.appendChild(card);
+    } else if (msg.type === 'ad') {
       const card = document.createElement('div');
       card.className = 'ad-card';
       const copy = document.createElement('div');
@@ -183,6 +262,51 @@
     renderExamples(t);
 
     const typingEl = showTyping();
+
+    if (t.isVideo) {
+      statusEl.textContent = 'Writing tagline\u2026';
+      try {
+        const tagRes = await fetch('/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tool: t.id, input: currentInput })
+        });
+        const tagJson = await tagRes.json();
+        const tagline = (tagRes.ok && !tagJson.error) ? tagJson.output : '';
+
+        statusEl.textContent = 'Generating scenes (1/3)\u2026';
+        const variations = ['wide establishing shot', 'close-up detail shot', 'dynamic angled shot'];
+        const imageSrcs = [];
+        for (let i = 0; i < variations.length; i++) {
+          statusEl.textContent = `Generating scenes (${i + 1}/3)\u2026`;
+          const res = await fetch('/api/image', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt: currentInput + ', ' + variations[i], tool: t.id })
+          });
+          const j = await res.json();
+          if (res.ok && !j.error && j.image) imageSrcs.push(j.image);
+        }
+        if (!imageSrcs.length) throw new Error('could not generate any scenes');
+
+        statusEl.textContent = 'Rendering video\u2026';
+        const blob = await buildKenBurnsVideo(imageSrcs, 2200);
+        const videoUrl = URL.createObjectURL(blob);
+
+        typingEl.remove();
+        // Video blobs can't be saved to localStorage (too large) — shown live, not persisted.
+        appendMessage({ role: 'assistant', type: 'video', text: tagline, videoUrl, ts: Date.now() }, false);
+        statusEl.textContent = 'Note: this video isn\u2019t saved to history \u2014 download it before leaving the page.';
+      } catch (err) {
+        typingEl.remove();
+        appendMessage({ role: 'assistant', type: 'error', text: 'Couldn\u2019t build the video — ' + (err.message || 'try again'), ts: Date.now() }, false);
+        statusEl.textContent = '';
+      } finally {
+        runBtn.disabled = false;
+      }
+      return;
+    }
+
     statusEl.textContent = 'Writing copy \u0026 designing banner\u2026';
 
     try {
