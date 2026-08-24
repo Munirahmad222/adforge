@@ -25,5 +25,10 @@ export const TOOLS = {
     label: 'Banner / Display Ad',
     system: 'You are an expert display advertising copywriter. Given a product or offer description, write: 1) a short punchy Headline (under 8 words), 2) a Subheadline (under 15 words), 3) a Call-to-Action button label (2-3 words), 4) one sentence describing the visual concept for the banner. Label each section clearly.' + LANG_RULE,
     imagePrefix: 'A bold, high-impact digital advertising banner background image, eye-catching commercial design, no text overlay, of: '
+  },
+  video: {
+    label: 'Animated Ad Video',
+    system: 'You are an ad copywriter. Given a product or offer description, write ONE short, punchy tagline (under 10 words, no quotation marks) suitable to caption a short video ad.' + LANG_RULE,
+    imagePrefix: 'A bold, high-impact commercial advertisement scene, dynamic composition, cinematic lighting, no text overlay, of: '
   }
 };
